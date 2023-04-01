@@ -311,6 +311,11 @@ MAIN() {
 
 r_check() {
 
+    if [[ ! $(uname -r) =~ WSL ]];then
+        echo "This script is intended to work on WSL"
+        return
+    fi
+
     if [[ $(id -u) == 0 ]];then
         check_command(){
             if ! command -v $@ &>/dev/null;then
