@@ -1,0 +1,413 @@
+#!/bin/env bash
+#
+# Copyright (c) 2023 falkensnavens
+# All rights reserved.
+# 
+# falkensnavens@gmail.com
+# source -- https://github.com/Snavens/cyg-wsl
+# 
+
+usage() {
+
+    echo -e "Usage: $(basename $0) <arg option> <name option>
+    ARG OPTIONS:    
+
+    install <option>    --> installs the specified package into cygwin terminal
+                other options:
+
+        --fix-broken    tries to fix packages that failed during installation process
+                        also try searching for a specific version using search option
+                        if this fix does not work 
+    
+    reinstall       --> reinstall a package which is already installed
+    
+    installd        --> install a package and all of its dependencies
+
+    reinstalld      --> reinstall package and all its dependancies
+    
+    list <option>   --> list installed packages and exit
+
+            -v          list versions of installed packages
+    
+    remove          --> remove package from cygwin entirely
+
+    search          --> searches for a package and list latest version 
+                    and previous ones, then exit
+    
+    dinstall        --> install specified version
+                try searching and give the version you would like
+                in the format x86_64/release/zzz/zzz/zzz.tar.xz\n"
+                         
+}
+if [[ $# -eq 0 || $1 == -help || $1 == --help || $1 == -h || $1 == --h ]] ; then
+    usage
+    exit 0
+fi
+
+
+
+install_main() {
+
+    if [[ ! $(ls $install_cache_dir/.) ]];then
+
+        clean_up() {
+            
+            if [[ -d $install_cache_dir/usr && $(ls $install_cache_dir/usr|grep -vwx 'bin'|grep -vwx 'lib') ]];then 
+                cd $install_cache_dir/usr;cp -rvf $(ls |grep -vwx 'bin'|grep -vwx 'lib'|cat|paste -s -d' ') $base_dir/usr > >(tee -a $log_dir/install.log) 2> >(tee -a $log_dir/install.log >&2)
+            fi
+
+            if [[ -d $install_cache_dir/usr/lib ]];then 
+                cp -rvf $install_cache_dir/usr/lib $base_dir > >(tee -a $log_dir/install.log) 2> >(tee -a $log_dir/install.log >&2)
+            fi
+            
+            if [[ -d $install_cache_dir/usr/bin ]];then 
+                cp -rvf $install_cache_dir/usr/bin $base_dir > >(tee -a $log_dir/install.log) 2> >(tee -a $log_dir/install.log >&2)
+            fi
+            
+            if [[ $(ls $install_cache_dir/.) && $(ls $install_cache_dir|grep -vwx 'usr') ]];then
+                cd $install_cache_dir;cp -rvf $(ls $install_cache_dir|grep -vwx 'usr'|cat|paste -s -d' ') $base_dir > >(tee -a $log_dir/install.log)  2> >(tee -a $log_dir/install.log >&2)
+            fi
+
+            while IFS= read -r file;do
+                if [[ $(grep -v "usr/bin" <<< $file) ]];then
+                    mv -v $file /mnt/c/Cygwin64/bin > >(tee -a $log_dir/install.log)  2> >(tee -a $log_dir/install.log >&2)
+                    ln -svf /mnt/c/Cygwin64/bin/"$(basename "$file")"  $base_dir/`grep -oP '(?<=/mnt/c/Cygwin64/tmp/install/).*(?=$)'<<<$(dirname "$file")`
+                fi
+            done < <(find $install_cache_dir/usr -iname "*.exe*")
+
+            echo -e "\e[032mcleaning up..\e[037m\n"
+            if [[ ! $(grep -wx $pkg_name'_v'$version $log_dir/setup-save) ]];then
+                grep -oP '(?<=->\s).*?(?=$)' $log_dir/install.log > $pkg_dir/$pkg_name'_v'$version
+                echo $pkg_name'_v'$version>>$log_dir/setup-save;cat $log_dir/setup-save|paste -s -d' '> $log_dir/CURRENT
+                rm -rvf $install_cache_dir/* $log_dir/install.log >/dev/null 2>&1
+            fi
+
+            echo "done!"
+            echo -e "installed: $pkg_name"_v"$version\n"
+            if [[ -f $log_dir/failed.txt && $(cat $log_dir/failed.txt) ]];then
+                if [[ $(cat $log_dir/failed.txt|grep -w -x "$pkg_name") ]];then
+                    for i in `cat $log_dir/failed.txt|grep -vwx "$pkg_name"`;do
+                        echo $i
+                    done > $log_dir/failed.txt
+                else
+                    echo -e "There are some packages that were not installed:\n\n$(cat $log_dir/failed.txt)\n\nrun $(basename $0) install --fix-broken to fix them\n"
+                fi
+            fi
+
+        }
+
+        unpack_file() {
+
+                case ${repo_file: -3} in 
+                    .xz | bz2 |tar) 
+                        echo -e "\e[032mextracting $pkg_name..\e[037m";sleep 1
+                        tar -xvf $pkg_cache_dir/$(basename "$1") > >(tee -a $log_dir/install.log) 2> >(tee -a $log_dir/install.log >&2) 
+                
+                    ;;
+                    zst) 
+                        echo -e "\e[032mextracting $pkg_name..\e[037m";sleep 1
+                        tar --use-compress-program=unzstd -xvf $pkg_cache_dir/$(basename "$1") > >(tee -a $log_dir/install.log) 2> >(tee -a $log_dir/install.log >&2) 
+                        
+                    ;;
+                    tgz)
+                        echo -e "\e[032mextracting $pkg_name..\e[037m";sleep 1
+                        tar -zxvf $pkg_cache_dir/$(basename "$1") > >(tee -a $log_dir/install.log) 2> >(tee -a $log_dir/install.log >&2) 
+                        
+                    ;;
+                    *) 
+                        echo "encountered an error, double check your input and also confirm your internet connection.."
+                        return
+                    ;;
+                esac
+                if [[ ! $(cat $log_dir/install.log) || $(grep "Unexpected EOF" $log_dir/install.log) ]];then
+                    echo -e "\e[031mInstalled file was corrupt!\e[0m\nskipping..\n"
+                    rm -rf $pkg_cache_dir/$(basename "$1") $log_dir/install.log $install_cache_dir/* >/dev/null 2>&1
+                    if [[ ! $(cat $log_dir/failed.txt 2>&1|grep -w -x $pkg_name) ]];then
+                        echo $pkg_name >>$log_dir/failed.txt
+                    fi
+                    return
+                else
+                    rm $log_dir/install.log && clean_up
+                fi
+
+        }
+
+        repo_fetch() {
+
+            if [[ -f $pkg_cache_dir/$(basename "$1") ]];then
+                cd $install_cache_dir
+                unpack_file "$1"
+            else
+                cd $pkg_cache_dir
+                wget https://cygwin.mirrors.hoobly.com/"$1"
+                if [[ ! -f $pkg_cache_dir/$(basename "$1") ]];then
+                    echo -e "\e[031mInstallation of $pkg_name failed, probably due to a network error..\e[0m"
+                    return
+                fi
+                cd $install_cache_dir
+                unpack_file "$1"
+            fi
+
+        }
+        
+        if [[ -z $repo_file ]];then
+            repo_file="`grep -oP -m1 "(?<=install:\s)[^ ]*"< <(sed -n -e '/@ '$1'/,$p' $log_dir/setup|head -n100)|grep "$1-"`"
+            if [[ -z $repo_file ]];then
+                echo -e "\e[031m$1 not found in repo!\e[0m"
+                return
+            fi
+        fi
+        case ${repo_file: -3} in
+            .xz) ext=.tar.xz ;; bz2) ext=.tar.bz2 ;; zst) ext=.tar.zst ;; tar) ext=.tar ;; tgz) ext=.tgz ;; *) echo "Did you specify that in the proper format?" && return ;;
+        esac
+        
+        pkg_name="`grep -B 100 "$repo_file" $log_dir/setup|tac|grep -oP -m1 '(?<=@\s).*(?=$)'`"
+        version="`grep -oP -m1 '(?<=version:\s).*(?=$)' < <(grep -B 100 "$repo_file" $log_dir/setup|tac)`"
+        
+        if [[ $(cat $log_dir/setup-save|grep -m1 ''"^$pkg_name"'_v') ]];then
+            if [[ $version != $(cat $log_dir/setup-save|grep -m1 ''"^$pkg_name"'_v'|grep -oP -m1 '(?<='"$pkg_name"'_v).*?(?=$)') ]];then
+                echo -en "\nConflicting versions detected\n\n$pkg_name version $(cat $log_dir/setup-save|grep -m1 ''"^$pkg_name"'_v'|grep -oP -m1 '(?<='"$pkg_name"'_v).*?(?=$)') is installed "
+                echo -en "and you are trying to install version $version. Remove current version first and install your desired version\n\n"
+            else
+                echo "$pkg_name is already installed!"
+                return
+            fi
+        else
+            repo_fetch "$repo_file"
+        fi
+
+    else
+        echo "$(basename $0) is probably being used by another process. try in later"
+        return
+    fi
+
+}
+
+MAIN() {
+    case $1 in 
+        install | reinstall | installd | remove | dinstall | reinstalld | search)
+            command=$1;shift;if [[ -z $1 ]];then echo "please specify a package/argument!";return;fi
+            if [[ $# -eq 1 ]];then
+                if [[ $command == reinstall ]];then
+                    if [[ `grep $1'_v' $log_dir/setup-save` ]];then
+                        cp -rf $log_dir/setup-save $log_dir/setup-save-1
+                        while IFS= read -r li;do 
+                            if [[ ! `echo $li|grep $1'_v'` ]];then
+                                echo $li
+                            fi
+                        done < $log_dir/setup-save-1 > $log_dir/setup-save
+                        rm $log_dir/setup-save-1
+                        $0 install $1
+                    else
+                        echo "$1 is not installed!"
+                    fi
+
+                elif [[ $command == installd ]];then
+                    depends(){
+                        for i in $(grep -oP -m1 "(?<=depends2:\s).*(?=$)"< <(sed -n -e '/@ '$1'/,$p' $log_dir/setup|head -n100));do
+                            if [[ $(echo $i|grep ,) ]];then echo $i|grep -oP '(?<=^).*(?=,)' ;else echo $i ;fi
+                        done
+                    }
+                    $0 install $1 `depends $1|paste -s -d' '`
+
+                elif [[ $command == remove ]];then
+                    if [[ `grep $1'_v' $log_dir/setup-save` ]];then
+                        echo "rm $log_dir/remove_package "$pkg_dir"/"`grep $1'_v' $log_dir/setup-save`";">$log_dir/remove_package 
+                        echo "gathering info..."
+                        while IFS= read -r li;do 
+                            echo rm -rvf $li|tee -a $log_dir/remove_package >/dev/null
+                        done < "$pkg_dir/`grep $1'_v' $log_dir/setup-save`"
+                        echo -e "\e[092m\nRemoving $1\e[0m";sleep 1
+                        bash $log_dir/remove_package
+                        sed -i "s#`grep $1"_v" $log_dir/setup-save`##g" $log_dir/setup-save
+                        echo -e "\ndone!";echo "removed $1"
+                    else
+                        echo "$1 is not installed"
+                    fi
+
+                elif [[ $command == dinstall ]];then
+                    repo_file=$1
+                    install_main
+
+                elif [[ $command == reinstalld ]];then
+                    if [[ `grep $1'_v' $log_dir/setup-save` ]];then
+                        depends(){
+                            echo $1
+                            for i in $(grep -oP -m1 "(?<=depends2:\s).*(?=$)"< <(sed -n -e '/@ '$1'/,$p' $log_dir/setup|head -n100));do
+                                if [[ $(echo $i|grep ,) ]];then echo $i|grep -oP '(?<=^).*(?=,)' ;else echo $i ;fi
+                            done
+                        }
+                        for pkgs in `depends $1` ;do
+                            $0 reinstall $pkgs
+                        done
+                    else
+                        echo "$1 is not installed!"
+                    fi
+
+                 elif [[ $command == search ]];then
+                    search_() {
+        
+                        if [[ ! $(grep -oP -m1 "(?<=install:\s).*?(?=\$)" < <(sed -n -e '/@ '$1'/,$p' $log_dir/setup|head -n100) |grep "$1") ]];then
+                            echo -e "\e[091mno search results for $1\e[0m"
+                            return
+                        else
+                            echo -e "\e[032mshowing results for $1\e[0m"
+                            while IFS= read -r li;do
+                                repo_file=$(grep -oP "(?<=install:\s).*(?=\$)" <<< "$li"|grep "$1"|awk '{print $1}')
+                                if [[ ! -z $repo_file ]];then
+                                    echo -e "\n@ $(grep -B100 $repo_file $log_dir/setup|tac|grep -m1 -oP '(?<=@\s).*(?=$)')\n"$li"" >&2
+                                elif [[ $(grep -oP "(?<=depends2:\s).*(?=\$)" <<< "$li"|grep "$1") ]];then
+                                    echo -e "$li" >&2
+                                fi
+                            done < <(sed -n -e '/@ '$1'/,$p' $log_dir/setup|head -n100)
+                        fi
+
+                    }
+                    search_ $1
+                
+                else
+                    base='^[A-Za-z0-9_]+$'
+                    if [[ $1 == --fix-broken ]];then
+                        if [[ $(cat $log_dir/failed.txt) ]];then
+                            $0 install $(cat $log_dir/failed.txt|paste -s -d' ')
+                        else
+                            echo "no package needs fixing."
+                            return
+                        fi
+                    elif [[ ${1::1} =~ $base ]];then
+                        install_main $1
+                    else
+                        return
+                    fi
+                fi
+            else
+                while IFS= read -r pkgs;do
+                    $0 $command $pkgs >&2
+                done < <(while read p;do echo $p|tr ' ' '\n';done <<< $@)
+            fi  
+        ;;
+        list)
+            if [[ $2 == -v ]];then
+                while IFS= read -r li;do 
+                    if [[ ! -z $li ]];then
+                        echo -en "\e[092m`grep -oP '(?<=^).*?(?=_v)'<<<"$li"`\e[0m   "
+                        echo -e "\e[092m$li\e[0m"|grep -oP '(?<=_v).*?(?=$)'
+                    fi
+                done < <(sort -k1,1n -k3nr $log_dir/setup-save)
+            else
+                while IFS= read -r li;do 
+                    if [[ ! -z $li ]];then
+                        echo -e "\e[092m$li\e[0m"|grep -oP '(?<=^).*?(?=_v)'
+                    fi
+                done < <(sort -k1,1n -k3nr $log_dir/setup-save)
+            fi
+        ;;
+
+        *)
+            usage
+        ;;
+    esac
+}
+
+r_check() {
+
+    if [[ $(id -u) == 0 ]];then
+        check_command(){
+            if ! command -v $@ &>/dev/null;then
+                echo -e "\e[031m$@ not installed!\e[32m"
+                echo -e "trying install..\e[0m"
+                sudo apt install $@ 
+                if ! command -v $@ &>/dev/null;then
+                    echo -e "\e[031m$@ install failed!"
+                    return
+                fi
+            fi
+        }
+        check_command lbzip2
+        check_command bzip2
+        check_command zstd
+        check_command wget
+        
+        #set directory variables
+        pkg_cache_dir=/mnt/c/Cygwin64/var/cache/cyg_wsl_cache/packages;pkg_dir=/mnt/c/Cygwin64/etc/installed
+        base_dir=/mnt/c/Cygwin64;log_dir=/mnt/c/Cygwin64/var/cache/cyg_wsl_cache;install_cache_dir=/mnt/c/Cygwin64/tmp/install
+        local_install=/mnt/c/Cygwin64/etc/setup/installed.db
+
+        if [[ ! -d $base_dir/usr || ! -d $base_dir/bin  ]];then
+            echo "looks like cygwin is missing"
+            echo "quitting.."
+            return
+        fi
+
+        if [[ ! -d $pkg_cache_dir ]];then
+            mkdir -p $pkg_cache_dir 
+        fi
+        
+        if [[ ! -d $pkg_dir ]];then
+            mkdir -p $pkg_dir 
+        fi
+
+        if [[ ! -d $install_cache_dir ]];then
+            mkdir -p $install_cache_dir 
+        fi
+
+        # check if setup present
+        if [[ ! -f $log_dir/setup ]];then
+            echo -e "\e[031mMissing setup, trying install\e[0m"
+            cd $log_dir;wget https://cygwin.mirrors.hoobly.com/x86_64/setup.bz2
+            bzip2 -df setup.bz2
+            if [[ ! -f $log_dir/setup ]];then
+                echo -e "\e[031mstill missing setup, aborted! !"
+                exit $?
+            fi        
+        fi
+
+        if [[ ! -f $log_dir/setup-save ]];then
+            if [[ -f ${local_install} ]];then
+                echo "saving local installation details.."
+                while IFS= read -r pkg;do
+                    case ${pkg: -3} in
+                        .xz) ext=.tar.xz ;; bz2) ext=.tar.bz2 ;; zst) ext=.tar.zst ;; tar) ext=.tar ;; tgz) ext=.tgz ;;
+                    esac
+                    if [ ! -z $ext ];then
+                        pkg_="`echo $pkg|grep -oP "(?<=^).*(?=$ext)"`"
+                        pkg_name="`grep -B100 $pkg_ $log_dir/setup|tac|grep -m1 -oP '(?<=@\s).*?(?=$)'`"
+                        version="`grep -B100 $pkg_ $log_dir/setup|tac|grep -m1 -oP '(?<=version:\s).*?(?=$)'`"
+                        echo $pkg_name'_v'$version|tee -a $log_dir/setup-save
+                    fi
+                done < <(cat ${local_install}|awk '{print $2}')
+            fi
+        else
+            touch $log_dir/setup-save
+        fi
+
+    else
+        echo "seems like you are not root, please switch to root for elevated permissions needed to write to cygwin folder"
+        return
+    fi
+
+}
+
+r_check
+
+if [[ ! $(r_check) ]];then
+    if [[ $1 == -f ]];then
+    # use if in any case the install fails, most likely caused by halting with ctrl+c
+        case $2 in
+            dinstall | install | reinstall | installd | reinstalld)
+            rm -rf $install_cache_dir/* 
+            shift
+            MAIN "$@"
+            ;;
+
+            *)
+            echo "force option is only available for install or reinstall"
+            ;;
+
+        esac
+    
+    else
+        MAIN "$@"
+    fi
+    exit $?
+fi
