@@ -9,6 +9,7 @@ inside your wsl, clone this repo and copy binary file to /usr/local/bin
 ## usage
 
 cyg-wsl [arg option] [name option]
+
     ARG OPTIONS:
 
     install <option>    --> installs the specified package into cygwin terminal

@@ -71,7 +71,7 @@ install_main() {
             while IFS= read -r file;do
                 if [[ $(grep -v "usr/bin" <<< $file) ]];then
                     mv -v $file $base_dir/bin > >(tee -a $log_dir/install.log)  2> >(tee -a $log_dir/install.log >&2)
-                    ln -svf $base_dir/bin/"$(basename "$file")"  $base_dir/`grep -oP '(?<=$install_cache_dir/).*(?=$)'<<<$(dirname "$file")`
+                    ln -svf $base_dir/bin/"$(basename "$file")"  $base_dir/`grep -oP '(?<='"$install_cache_dir"'/).*(?=$)'<<<$(dirname "$file")`
                 fi
             done < <(find $install_cache_dir/usr -iname "*.exe*")
 
