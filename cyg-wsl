@@ -70,8 +70,8 @@ install_main() {
 
             while IFS= read -r file;do
                 if [[ $(grep -v "usr/bin" <<< $file) ]];then
-                    mv -v $file /mnt/c/Cygwin64/bin > >(tee -a $log_dir/install.log)  2> >(tee -a $log_dir/install.log >&2)
-                    ln -svf /mnt/c/Cygwin64/bin/"$(basename "$file")"  $base_dir/`grep -oP '(?<=/mnt/c/Cygwin64/tmp/install/).*(?=$)'<<<$(dirname "$file")`
+                    mv -v $file $base_dir/bin > >(tee -a $log_dir/install.log)  2> >(tee -a $log_dir/install.log >&2)
+                    ln -svf $base_dir/bin/"$(basename "$file")"  $base_dir/`grep -oP '(?<=$install_cache_dir/).*(?=$)'<<<$(dirname "$file")`
                 fi
             done < <(find $install_cache_dir/usr -iname "*.exe*")
 
@@ -334,15 +334,16 @@ r_check() {
         check_command wget
         
         #set directory variables
-        pkg_cache_dir=/mnt/c/Cygwin64/var/cache/cyg_wsl_cache/packages;pkg_dir=/mnt/c/Cygwin64/etc/installed
-        base_dir=/mnt/c/Cygwin64;log_dir=/mnt/c/Cygwin64/var/cache/cyg_wsl_cache;install_cache_dir=/mnt/c/Cygwin64/tmp/install
-        local_install=/mnt/c/Cygwin64/etc/setup/installed.db
-
-        if [[ ! -d $base_dir/usr || ! -d $base_dir/bin  ]];then
+        if [[ $(echo /mnt/c/*ygwin64|grep -v "*") ]];then
+            base_dir=$(echo /mnt/c/*ygwin64|grep -v "*")
+        else
             echo "looks like cygwin is missing"
             echo "quitting.."
             return
         fi
+        pkg_cache_dir=$base_dir/var/cache/cyg_wsl_cache/packages;pkg_dir=$base_dir/etc/installed
+        log_dir=$base_dir/var/cache/cyg_wsl_cache;install_cache_dir=$base_dir/tmp/install
+        local_install=$base_dir/etc/setup/installed.db
 
         if [[ ! -d $pkg_cache_dir ]];then
             mkdir -p $pkg_cache_dir 
@@ -363,7 +364,7 @@ r_check() {
             bzip2 -df setup.bz2
             if [[ ! -f $log_dir/setup ]];then
                 echo -e "\e[031mstill missing setup, aborted! !"
-                exit $?
+                return
             fi        
         fi
 
