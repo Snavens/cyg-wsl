@@ -495,3 +495,4 @@ else
     echo "seems like you are not root, please switch to root for elevated permissions needed to write to cygwin folder"
     exit $?
 fi
+rm /tmp/.$(basename $0).lock >/dev/null 2>&1
